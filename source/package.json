@@ -1,0 +1,11 @@
+{
+  "name": "gameware-cleaner-color-source",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "scripts": { "build": "node build.mjs" },
+  "dependencies": {
+    "@material/material-color-utilities": "0.4.0",
+    "esbuild": "0.28.2"
+  }
+}

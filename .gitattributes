@@ -1,0 +1,10 @@
+*.ps1 -text
+*.cmd -text
+*.md text eol=lf
+LICENSE text eol=lf
+*.txt text eol=lf
+*.mjs text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+.gitattributes text eol=lf
+.gitignore text eol=lf
