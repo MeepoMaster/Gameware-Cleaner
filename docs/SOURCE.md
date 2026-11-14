@@ -1,6 +1,6 @@
 # 源码说明
 
-`LeiGod-OneClick.ps1` 是完整的一键脚本源码，包含补丁、样式、取色助手和还原逻辑。普通使用不需要 Node.js，也不需要执行本页命令。
+`LeiGod-OneClick.ps1` 是完整的一键脚本源码，包含补丁、样式、取色和还原逻辑。普通使用不需要 Node.js，也不需要执行本页命令。
 
 其中压缩后的离线配色 JavaScript 由 `source/md3e-system-color-entry.js` 与固定版本的 `@material/material-color-utilities` 生成。为便于检查和修改，这里同时提供生成入口、构建脚本及依赖锁文件。
 

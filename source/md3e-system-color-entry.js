@@ -11,14 +11,12 @@ const roles = ['primary', 'onPrimary', 'primaryContainer', 'onPrimaryContainer',
   'surfaceContainerLowest', 'surfaceContainerLow', 'surfaceContainer',
   'surfaceContainerHigh', 'surfaceContainerHighest', 'outline', 'outlineVariant',
   'inverseSurface', 'inverseOnSurface', 'scrim'];
-const root = document.documentElement;
-const source = document.currentScript?.getAttribute('data-color-source');
+// The seed is read once by the installer (Windows UISettings Accent) and written into
+// data-seed; there is no background process and no polling.
+const seedAttr = document.currentScript?.getAttribute('data-seed') || null;
 if (window.__gcMd3eColor) window.__gcMd3eColor.dispose();
 let current = null;
 let sheet = null;
-let timer = null;
-let pending = null;
-let lastSeen = 0;
 function name(role) { return '--md3e-' + role.replace(/[A-Z]/g, c => '-' + c.toLowerCase()); }
 function palette(seed, dark) {
   const scheme = new SchemeTonalSpot(Hct.fromInt(argbFromHex(seed)), dark, 0, '2021');
@@ -48,29 +46,12 @@ function setAccent(seed) {
   } catch (_) { return false; }
 }
 function dispose() {
-  if (timer !== null) clearInterval(timer);
-  if (pending) pending.remove();
   setAccent(null);
   window.removeEventListener('pagehide', dispose);
   delete window.__gcMd3eSetAccent;
   delete window.__gcMd3eColor;
-  delete window.__gcMd3eReceiveAccent;
 }
 window.__gcMd3eSetAccent = setAccent;
-window.__gcMd3eColor = { dispose, get seed() { return current; }, level: 'Medium' };
-window.__gcMd3eReceiveAccent = (seed, timestamp) => {
-  if (!Number.isSafeInteger(timestamp) || timestamp > Date.now() + 5000 || Date.now() - timestamp > 15000) { setAccent(null); return; }
-  lastSeen = Date.now();
-  setAccent(seed);
-};
-function poll() {
-  if (lastSeen && Date.now() - lastSeen > 15000) setAccent(null);
-  if (pending) { pending.remove(); pending = null; }
-  const script = document.createElement('script');
-  script.src = source + '?v=' + Date.now();
-  pending = script;
-  script.onload = script.onerror = () => { script.remove(); if (pending === script) pending = null; };
-  document.head.appendChild(script);
-}
-if (source && /^file:\/\//i.test(source) && !/[?#]/.test(source)) { poll(); timer = setInterval(poll, 2000); }
+window.__gcMd3eColor = { dispose, get seed() { return current; }, source: 'install-time' };
+setAccent(seedAttr);
 window.addEventListener('pagehide', dispose);
