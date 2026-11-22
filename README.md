@@ -4,14 +4,19 @@
 
 **雷神加速器一键精简：去广告、去捆绑、换上 M3E 主题，随时一键还原。**
 
-[![最新版本](https://img.shields.io/github/v/release/TG-Twilight/Gameware-Cleaner?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=FF9B27)](https://github.com/TG-Twilight/Gameware-Cleaner/releases/latest)
+[![最新版本](https://img.shields.io/github/v/release/MeepoMaster/Gameware-Cleaner?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&color=FF9B27)](https://github.com/MeepoMaster/Gameware-Cleaner/releases/latest)
 ![平台](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4)
 ![雷神](https://img.shields.io/badge/%E9%9B%B7%E7%A5%9E-11.3.3.2-FF9B27)
 [![许可](https://img.shields.io/badge/license-GPL--3.0--only-blue)](LICENSE)
 
-[**下载**](https://github.com/TG-Twilight/Gameware-Cleaner/releases/latest) · [效果](#效果) · [使用](#使用) · [还原](#还原) · [常见问题](#常见问题)
+[**下载**](https://github.com/MeepoMaster/Gameware-Cleaner/releases/latest) · [效果](#效果) · [使用](#使用) · [还原](#还原) · [常见问题](#常见问题)
 
 </div>
+
+> [!NOTE]
+> **这是 [TG-Twilight/Gameware-Cleaner](https://github.com/TG-Twilight/Gameware-Cleaner) 的 fork**，
+> 只额外加了一处改动：「系统设置 → IPV6 禁用」**默认关闭并固定为关闭**
+> （雷神原本会在加速时让驱动禁用本机 IPv6）。不需要这个改动请用上游原版。
 
 > [!IMPORTANT]
 > **用过 0.10.0～0.12.0 并开了取色，开机后会弹出空白终端窗口？**
@@ -64,7 +69,7 @@
 
 > 运行前请先阅读[免责声明](docs/DISCLAIMER.md)。
 
-1. 到 [**Releases**](https://github.com/TG-Twilight/Gameware-Cleaner/releases/latest) 下载 `LeiGod-OneClick-<版本>.zip`，**完整解压**。
+1. 到 [**Releases**](https://github.com/MeepoMaster/Gameware-Cleaner/releases/latest) 下载 `LeiGod-OneClick-<版本>.zip`，**完整解压**。
 2. 完全退出雷神（包括托盘图标）。
 3. 双击 `Run-LeiGod-OneClick.cmd`，UAC 弹窗点“是”。
 4. 按提示输入 **Y** / **N**，直接回车用默认值。
