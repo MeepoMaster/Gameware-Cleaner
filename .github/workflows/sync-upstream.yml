@@ -1,0 +1,79 @@
+name: Sync upstream
+
+# 每天北京时间 11:17 检查上游 TG-Twilight/Gameware-Cleaner，有更新就自动合并。
+# 也可在 Actions 页面手动点 Run workflow 立刻跑一次。
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/TG-Twilight/Gameware-Cleaner.git 2>/dev/null || true
+          git fetch --no-tags upstream main
+          echo "upstream head: $(git rev-parse --short upstream/main)"
+          echo "local head: $(git rev-parse --short HEAD)"
+
+      - name: Merge upstream
+        id: merge
+        run: |
+          if git merge --no-edit upstream/main; then
+            echo "result=ok" >> "$GITHUB_OUTPUT"
+          else
+            git merge --abort || true
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Syntax check
+        if: steps.merge.outputs.result == 'ok'
+        shell: pwsh
+        run: |
+          $errs = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/LeiGod-OneClick.ps1", [ref]$null, [ref]$errs) | Out-Null
+          if ($errs -and $errs.Count -gt 0) {
+            $errs | Select-Object -First 10 | ForEach-Object { Write-Host "line $($_.Extent.StartLineNumber): $($_.Message)" }
+            Write-Error "合并后脚本语法检查不通过，未推送。"
+            exit 1
+          }
+          Write-Host "语法检查通过"
+
+      - name: Push
+        if: steps.merge.outputs.result == 'ok'
+        run: |
+          if git diff --quiet origin/main..HEAD; then
+            echo "上游没有新提交，无需推送"
+          else
+            git push origin HEAD:main
+            echo "已推送 $(git log -1 --oneline)"
+          fi
+
+      - name: Open issue when manual work is needed
+        if: failure() || steps.merge.outputs.result == 'conflict'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="上游更新需要手动处理"
+          if [ "$(gh issue list --state open --search "$title in:title" --json number --jq 'length')" != "0" ]; then
+            echo "已有未关闭的提示 issue，跳过"
+            exit 0
+          fi
+          gh issue create --title "$title" --body "定时同步上游失败：上游改动与本 fork 的改动（IPV6 禁用默认关闭）冲突，或合并后脚本语法检查不通过。请查看 Actions 里这次运行的日志；修好后关掉本 issue。"
