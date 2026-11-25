@@ -17,8 +17,8 @@
       - 精简安装目录：client_tools、可下载工具包、SDK 自带工具、应用宝、
         旧 SDK 更新包、日志、更新缓存
       - 工具运行时做硬链接（约省 165 MB）
-      - 默认停更：updater.exe 改名 + hosts 屏蔽 buildnum 域名
-        （不想停更加 -KeepUpdates）
+      - 默认停更：updater.exe 改名 + 锁定渲染层热更新目录 resources\inline
+        + hosts 屏蔽 buildnum 域名（不想停更加 -KeepUpdates）
 
     所有改动都备份在 %USERPROFILE%\GamewareCleanerBackup\leigod-<时间>，
     备份目录里自带 restore.cmd，随时可以一键还原。
@@ -33,7 +33,7 @@
     还原时指定备份目录；不填则自动使用最新的一份。
 
 .PARAMETER KeepUpdates
-    不停更：不改 updater.exe，也不改 hosts。
+    不停更：不改 updater.exe，也不改 hosts；之前锁过的热更新目录会解锁。
 
 .PARAMETER NoHosts
     只跳过 hosts 修改（调试用）。
@@ -104,7 +104,7 @@ param(
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-$script:ScriptVersion = '0.13.0'
+$script:ScriptVersion = '0.13.1'
 $script:AppTag = 'leigod'
 $script:LogPath = $null
 $script:TempDir = $null
@@ -3827,7 +3827,7 @@ function Invoke-RendererPatches {
     $headerChunk = Find-JsChunk -WorkDir $WorkDir -MustContain @('name:"HeaderGameSearch"', 'leigod_header_slogn')
     if (-not $headerChunk) { throw '找不到顶栏 chunk（HeaderGameSearch / leigod_header_slogn）' }
     Write-Log ('顶栏 chunk：' + (Get-UnderRootRel $headerChunk $WorkDir))
-    Write-Log '  这一步要对约 3 MB 的顶栏 chunk 做正则扫描，是全流程最慢的一步，通常要 1 分钟左右，请耐心等待，不是卡住了。' 'DarkGray'
+    Write-Log '  这一步要对约 3 MB 的顶栏 chunk 做正则扫描，是全流程最慢的一步，通常要 2～3 分钟（高性能 CPU 也一样），请耐心等待，不是卡住了。' 'DarkGray'
     $headerText = Get-JsText $headerChunk
     $r = Patch-HeaderAds $headerText
     $r.Log | ForEach-Object { Write-Log ('  - ' + $_) }
@@ -4038,12 +4038,115 @@ function Invoke-LeigodHardlinks {
     }
 }
 
+# 渲染层热更新（11/25 实测）：主进程走 secapi 的 /secapi/tools/upgrade/hot/version
+# （fast hot-check），不经过 resources.leigodtech.com，hosts 挡不住；secapi 同时负责登录，
+# 不能封。热更新先把 zip 下到 resources\inline\<版本>\，解压后再覆盖 renderer.asar。
+# 这里预先建好 resources\inline，并加 Everyone 的 Deny ACE：
+#   inline 本身：禁止新建文件/子目录、禁止删除（mkdir/写 zip/rm -rf/改名都 EPERM）
+#   resources：只对本目录禁止“删除子项”，否则父目录的 FILE_DELETE_CHILD 能绕过上面的禁止删除
+# Deny 对管理员同样生效；其他文件仍有自己继承来的删除权限，不受影响。
+function Get-HotUpdateLockRules {
+    $everyone = New-Object System.Security.Principal.SecurityIdentifier('S-1-1-0')
+    $r = [System.Security.AccessControl.FileSystemRights]
+    $inlineRights = $r::CreateFiles -bor $r::CreateDirectories -bor $r::Delete -bor $r::DeleteSubdirectoriesAndFiles
+    $parentRights = $r::DeleteSubdirectoriesAndFiles
+    return @{
+        Inline = New-Object System.Security.AccessControl.FileSystemAccessRule($everyone, $inlineRights, 'None', 'None', 'Deny')
+        Parent = New-Object System.Security.AccessControl.FileSystemAccessRule($everyone, $parentRights, 'None', 'None', 'Deny')
+    }
+}
+
+function Test-AclHasRule {
+    param([string]$Path, $Rule)
+    $acl = Get-Acl -LiteralPath $Path
+    foreach ($a in $acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier])) {
+        if ($a.AccessControlType -eq 'Deny' -and $a.IdentityReference.Value -eq 'S-1-1-0' -and
+            ($a.FileSystemRights -band $Rule.FileSystemRights) -eq $Rule.FileSystemRights) { return $true }
+    }
+    return $false
+}
+
+function Lock-LeigodHotUpdate {
+    param([string]$InstallRoot, [string]$BackupPath, $Manifest)
+    $resources = Get-RootItem $InstallRoot 'resources'
+    $inline = Get-RootItem $InstallRoot 'resources\inline'
+    $rules = Get-HotUpdateLockRules
+    try {
+        if ((Test-Path -LiteralPath $inline) -and (Test-AclHasRule $inline $rules.Inline) -and (Test-AclHasRule $resources $rules.Parent)) {
+            Write-Log '渲染层热更新已经是锁定状态（resources\inline）'
+            return
+        }
+        if (Test-Path -LiteralPath $inline) {
+            $item = Get-Item -LiteralPath $inline -Force
+            $hasContent = (-not $item.PSIsContainer) -or (@(Get-ChildItem -LiteralPath $inline -Force).Count -gt 0)
+            if ($hasContent) {
+                # 已下载未生效的热更新包，移进隔离区
+                $rel = 'resources\inline'
+                $dst = Get-UniqueQuarantinePath (Join-Path $BackupPath 'quarantine') $rel
+                $parent = Split-Path -Parent $dst
+                if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+                $type = if ($item.PSIsContainer) { 'Directory' } else { 'File' }
+                Move-Item -LiteralPath $inline -Destination $dst -Force
+                $Manifest.quarantine += [ordered]@{ relative = $rel; type = $type; bytes = 0; quarantinedTo = $dst }
+                Write-Log '已把待生效的热更新缓存 resources\inline 移入隔离区'
+            }
+        }
+        if (-not (Test-Path -LiteralPath $inline)) {
+            New-Item -ItemType Directory -Path $inline | Out-Null
+        }
+        $acl = Get-Acl -LiteralPath $inline
+        $acl.AddAccessRule($rules.Inline)
+        Set-Acl -LiteralPath $inline -AclObject $acl
+        $acl = Get-Acl -LiteralPath $resources
+        $acl.AddAccessRule($rules.Parent)
+        Set-Acl -LiteralPath $resources -AclObject $acl
+        $Manifest.hotUpdateLock = 'resources\inline'
+        Write-Log '已锁定渲染层热更新（resources\inline 禁止写入/删除）'
+    } catch {
+        Write-WarnLine ('锁定渲染层热更新失败（去广告不受影响）：' + $_.Exception.Message)
+    }
+}
+
+function Unlock-LeigodHotUpdate {
+    param([string]$InstallRoot)
+    $resources = Get-RootItem $InstallRoot 'resources'
+    $inline = Get-RootItem $InstallRoot 'resources\inline'
+    $rules = Get-HotUpdateLockRules
+    $changed = $false
+    try {
+        if ((Test-Path -LiteralPath $resources) -and (Test-AclHasRule $resources $rules.Parent)) {
+            $acl = Get-Acl -LiteralPath $resources
+            $acl.RemoveAccessRuleSpecific($rules.Parent)
+            Set-Acl -LiteralPath $resources -AclObject $acl
+            $changed = $true
+        }
+        if (Test-Path -LiteralPath $inline -PathType Container) {
+            if (Test-AclHasRule $inline $rules.Inline) {
+                $acl = Get-Acl -LiteralPath $inline
+                $acl.RemoveAccessRuleSpecific($rules.Inline)
+                Set-Acl -LiteralPath $inline -AclObject $acl
+                $changed = $true
+            }
+            if (@(Get-ChildItem -LiteralPath $inline -Force).Count -eq 0) {
+                # 只删本工具建的空目录，不递归
+                Remove-Item -LiteralPath $inline -Force
+            }
+        }
+        if ($changed) { Write-Log '已解除渲染层热更新锁定（resources\inline）' }
+    } catch {
+        Write-WarnLine ('解除渲染层热更新锁定失败：' + $_.Exception.Message)
+    }
+}
+
 function Invoke-LeigodUpdateFreeze {
     param([string]$InstallRoot, [string]$BackupPath, $Manifest)
     if ($KeepUpdates) {
         Write-Log '按 -KeepUpdates 跳过停更'
+        Unlock-LeigodHotUpdate $InstallRoot
         return
     }
+
+    Lock-LeigodHotUpdate -InstallRoot $InstallRoot -BackupPath $BackupPath -Manifest $Manifest
 
     try {
         $updater = Get-RootItem $InstallRoot 'resources\leishenSdk\updater.exe'
@@ -4202,6 +4305,9 @@ function Invoke-Restore {
 
     Invoke-LegacyAccentCleanup $backup
 
+    # 先解锁，否则锁住的空 inline 会挡住隔离区里的热更新缓存放回
+    Unlock-LeigodHotUpdate $installRoot
+
     foreach ($q in @($manifest.quarantine)) {
         if (-not $q) { continue }
         $rel = [string]$q.relative
@@ -4242,6 +4348,7 @@ function Invoke-Restore {
             Write-Log ('已恢复更新器：' + $r.from)
         }
     }
+
 
     if (-not $NoHosts) {
         $hostsPath = Get-HostsPath
@@ -4572,6 +4679,7 @@ function Main {
             rename = @()
             hostsBlock = @()
             hostsBackup = $null
+            hotUpdateLock = $null
             errors = @()
         }
 
@@ -4607,6 +4715,7 @@ Gameware-Cleaner — 雷神精简备份
   - quarantine\ 里被隔离的文件放回原位置
   - resources\tools 下的硬链接恢复成独立文件
   - updater.exe.disabled 改回 updater.exe
+  - 解除 resources\inline 的热更新锁定（权限还原，删掉空目录）
   - 移除 hosts 里的雷神停更条目
 
 注意：
@@ -4626,7 +4735,7 @@ Gameware-Cleaner — 雷神精简备份
         if ($KeepUpdates) {
             Write-Log '更新：保留（-KeepUpdates）'
         } else {
-            Write-Log '更新：已停更（updater.exe 改名 + hosts 屏蔽 buildnum 域名）'
+            Write-Log '更新：已停更（updater.exe 改名 + 锁定渲染层热更新 + hosts 屏蔽 buildnum 域名）'
         }
         Write-Log ''
         if ($result -eq 'applied') {
