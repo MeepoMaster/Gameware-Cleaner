@@ -74,9 +74,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "v${{ steps.ver.outputs.base }}-ipv6.1"
-          $exists = gh release view $tag --json tagName 2>$null
-          if ($LASTEXITCODE -eq 0 -and $exists) { Write-Output "exists=true" >> $env:GITHUB_OUTPUT } else { Write-Output "exists=false" >> $env:GITHUB_OUTPUT }
+          $exists = 'false'
+          $out = gh release view $tag --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0 -and $out) { $exists = 'true' }
+          Write-Output ("exists=" + $exists) >> $env:GITHUB_OUTPUT
           Write-Output ("tag=" + $tag) >> $env:GITHUB_OUTPUT
+          Write-Output ("release " + $tag + " 已存在：" + $exists)
+          $global:LASTEXITCODE = 0
 
       - name: Build package
         id: build
