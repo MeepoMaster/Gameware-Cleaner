@@ -92,7 +92,7 @@ jobs:
         if: steps.merge.outputs.changed == 'true' || steps.rel.outputs.exists == 'false' || inputs.force == true
         shell: pwsh
         run: |
-          ./tools/build-release.ps1 -VersionSuffix ipv6.1
+          ./tools/build-release.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Syntax check built script
