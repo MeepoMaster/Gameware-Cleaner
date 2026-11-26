@@ -11,8 +11,6 @@
         不再出现“没加速了但时长还在跑”（不弹确认框，也不弹时长面板）
       - 游戏详情页重新排版（居中单列 + 操作卡片，两个按钮等宽等高）
       - 顶栏固定为悬停高度 60px，鼠标移入/移出不再上下跳
-      - 系统设置里的「IPV6 禁用」默认关闭：开关不再自动打开，
-        加速时也不向驱动下发禁用 IPv6 的指令（默认 Y）
       - 连续 3 分钟未加速时自动暂停计时（默认 Y）
       - M3E 控件换肤，可选择使用 Windows 系统主题色（运行时读取一次，不常驻后台）
       - IPC 层拦截广告接口、广告通知、工具自动下载、活动外链
@@ -64,10 +62,6 @@
 .PARAMETER AutoPauseIdleTime
     计时开启且连续 3 分钟未加速时自动暂停时长（默认 Y）。启动时选择 N 可跳过。
 
-.PARAMETER KeepIpv6
-    把「系统设置 → IPV6 禁用」固定为关闭（默认 Y）：开关不再自动打开，读到的旧设置也按关闭显示，
-    加速请求里的 banipv6 固定为 0，不会再让驱动禁用本机 IPv6。启动时选择 N 可跳过。
-
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File .\LeiGod-OneClick.ps1
 
@@ -104,14 +98,13 @@ param(
     [switch]$BlockAds = $true,
     [switch]$CleanTools = $true,
     [switch]$HardlinkTools = $true,
-    [switch]$AutoPauseIdleTime = $true,
-    [switch]$KeepIpv6 = $true
+    [switch]$AutoPauseIdleTime = $true
 )
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-$script:ScriptVersion = '0.14.1'
+$script:ScriptVersion = '0.13.1'
 $script:AppTag = 'leigod'
 $script:LogPath = $null
 $script:TempDir = $null
@@ -121,7 +114,7 @@ $script:HardlinkSavedBytes = [int64]0
 $script:Completed = $false
 $script:ElevationStarted = $false
 $script:AccentSeedValue = $null
-$featureSwitches = @('Md3eTheme', 'FollowSystemAccent', 'AutoPauseIdleTime', 'KeepIpv6', 'HideCommunitySidebar', 'HideBottomPromoBar', 'HideHomeBanner', 'HideHeaderPromo', 'PinHeaderHeight', 'StopButtonPauses', 'BlockAds', 'CleanTools', 'HardlinkTools')
+$featureSwitches = @('Md3eTheme', 'FollowSystemAccent', 'AutoPauseIdleTime', 'HideCommunitySidebar', 'HideBottomPromoBar', 'HideHomeBanner', 'HideHeaderPromo', 'PinHeaderHeight', 'StopButtonPauses', 'BlockAds', 'CleanTools', 'HardlinkTools')
 foreach ($feature in ($DisabledFeatures -split ',' | Where-Object { $_.Trim() })) {
     $feature = $feature.Trim()
     if ($featureSwitches -notcontains $feature) { throw ('未知功能名称：' + $feature) }
@@ -2054,133 +2047,6 @@ function Patch-IpcAdGuard {
     return $patched
 }
 
-function Patch-Ipv6SettingSwitch {
-    # 「系统设置 → IPV6 禁用」开关：默认关、读到旧设置也按关显示、去掉自动打开。
-    # 依赖三个结构（压缩后的变量名各版本不同，这里按结构识别）：
-    #   ...=de(()=>({onAppQuite:V,trendLines:T,banipv6:S,nodeSelect:C}))
-    #   {switchValue:S,toggleSwitch:B,switchClass:ee}=g({normalVal:!1,openVal:!0})
-    #   S.value=u.banipv6, ..., X().then(_=>{_&&(S.value=!0)})
-    # 不是系统设置页的 chunk 返回 $null。
-    param([string]$s)
-    $log = New-Object System.Collections.ArrayList
-
-    $m = [regex]::Match($s, 'onAppQuite\s*:\s*[A-Za-z_$][\w$]*\s*,\s*trendLines\s*:\s*[A-Za-z_$][\w$]*\s*,\s*banipv6\s*:\s*([A-Za-z_$][\w$]*)')
-    if (-not $m.Success) {
-        $m = [regex]::Match($s, 'banipv6\s*:\s*([A-Za-z_$][\w$]*)\s*,\s*nodeSelect\s*:')
-    }
-    if (-not $m.Success) { return $null }
-    $var = $m.Groups[1].Value
-    $varRe = [regex]::Escape($var)
-
-    # 1) 开关默认值：normalVal:!0 -> !1（有的版本默认就是 !1，这里幂等）
-    $sw = [regex]::Match($s, '\{switchValue:' + $varRe + '\s*,')
-    if ($sw.Success) {
-        $len = [Math]::Min(260, $s.Length - $sw.Index)
-        $window = $s.Substring($sw.Index, $len)
-        $fixed = $window.Replace('normalVal:!0', 'normalVal:!1')
-        if ($fixed -cne $window) {
-            $s = $s.Substring(0, $sw.Index) + $fixed + $s.Substring($sw.Index + $len)
-            $log.Add('开关默认值改为关闭') | Out-Null
-        }
-    }
-
-    # 2) 读本地存储时固定为关（以前存过 true 的机器也会显示关闭）
-    $readPattern = $varRe + '\.value\s*=\s*[A-Za-z_$][\w$]*\.banipv6'
-    if ([regex]::IsMatch($s, $readPattern)) {
-        $s = [regex]::Replace($s, $readPattern, ($var + '.value=!1'))
-        $log.Add('读取已保存的设置时按关闭处理') | Out-Null
-    }
-
-    # 3) 去掉“环境检查通过就自动打开”的调用
-    $autoPattern = ',\s*[A-Za-z_$][\w$]*\(\)\.then\(\s*([A-Za-z_$][\w$]*)\s*=>\s*\{\s*\1\s*&&\s*\(\s*' + $varRe + '\.value\s*=\s*!0\s*\)\s*\}\s*\)'
-    if ([regex]::IsMatch($s, $autoPattern)) {
-        $s = [regex]::Replace($s, $autoPattern, '')
-        $log.Add('去掉自动打开「IPV6 禁用」的逻辑') | Out-Null
-    }
-
-    # 4) 开关点不动：避免“界面上打开了、实际不生效”的错觉
-    $propIndex = $s.IndexOf('prop:"banipv6"', [StringComparison]::Ordinal)
-    if ($propIndex -ge 0) {
-        $tailLen = [Math]::Min(420, $s.Length - $propIndex)
-        $tail = $s.Substring($propIndex, $tailLen)
-        if ($tail.IndexOf('onClick:()=>{}', [StringComparison]::Ordinal) -lt 0) {
-            $onClick = [regex]::Match($tail, 'onClick:e\[\d+\]\|\|\(e\[\d+\]=\(\.\.\.([A-Za-z_$][\w$]*)\)=>s\(([A-Za-z_$][\w$]*)\)&&s\(\2\)\(\.\.\.\1\)\)')
-            if ($onClick.Success) {
-                $abs = $propIndex + $onClick.Index
-                $s = $s.Substring(0, $abs) + 'onClick:()=>{}' + $s.Substring($abs + $onClick.Length)
-                $log.Add('开关点击已禁用（保持关闭）') | Out-Null
-            } else {
-                $log.Add('没能禁用开关点击：界面上的开关仍可点，但加速时已按关闭处理') | Out-Null
-            }
-        }
-    }
-
-    if ([regex]::IsMatch($s, $varRe + '\.value\s*=\s*!0')) {
-        throw ('「IPV6 禁用」开关里仍有强制打开的代码（变量 ' + $var + '），请把 assets 下对应的 chunk 发回反馈')
-    }
-    return @{ Text = $s; Log = $log }
-}
-
-function Patch-Ipv6AccParam {
-    # 加速请求参数 banipv6 固定为 0：不再让驱动在加速时禁用本机 IPv6。
-    # 只认 banipv6:+变量 这种“取反/转换后下发”的写法，避免误改设置页的映射对象。
-    # 找不到该写法时返回 $null（不是加速参数 chunk）。
-    param([string]$s)
-    $log = New-Object System.Collections.ArrayList
-    $pattern = 'banipv6\s*:\s*\+\s*[A-Za-z_$][\w$]*'
-    $count = [regex]::Matches($s, $pattern).Count
-    if ($count -eq 0) {
-        if ([regex]::IsMatch($s, 'banipv6\s*:\s*0')) { return @{ Text = $s; Log = $log } }
-        return $null
-    }
-    $s = [regex]::Replace($s, $pattern, 'banipv6:0')
-    $log.Add('加速参数 banipv6 固定为 0（共 ' + $count + ' 处）') | Out-Null
-    return @{ Text = $s; Log = $log }
-}
-
-function Invoke-Ipv6BanOffPatches {
-    # 把「系统设置 → IPV6 禁用」整体固定为关闭。返回 $true 表示本次有改动。
-    # 不写死 chunk 名：逐个扫描 assets 下的 js，按代码结构定位。
-    param([string]$WorkDir)
-    $changed = $false
-    $switchSeen = $false
-    $paramSeen = $false
-
-    $files = @()
-    $assets = Join-Path $WorkDir 'assets'
-    if (Test-Path -LiteralPath $assets) {
-        $files += @(Get-ChildItem -LiteralPath $assets -Filter '*.js' -File -Force)
-    }
-    $files += @(Get-ChildItem -LiteralPath $WorkDir -Filter '*.js' -File -Force)
-
-    foreach ($file in $files) {
-        $text = Get-JsText $file.FullName
-        if ($text.IndexOf('banipv6', [StringComparison]::Ordinal) -lt 0) { continue }
-        $rel = Get-UnderRootRel $file.FullName $WorkDir
-
-        $r = Patch-Ipv6SettingSwitch $text
-        if ($r) {
-            $switchSeen = $true
-            Write-Log ('系统设置 chunk：' + $rel)
-            $r.Log | ForEach-Object { Write-Log ('  - ' + $_) }
-            if ($r.Text -cne $text) { Set-JsText $file.FullName $r.Text; $changed = $true }
-            $text = $r.Text
-        }
-
-        $r = Patch-Ipv6AccParam $text
-        if ($r) {
-            $paramSeen = $true
-            Write-Log ('加速参数 chunk：' + $rel)
-            $r.Log | ForEach-Object { Write-Log ('  - ' + $_) }
-            if ($r.Text -cne $text) { Set-JsText $file.FullName $r.Text; $changed = $true }
-        }
-    }
-
-    if (-not $switchSeen) { throw '找不到「系统设置 → IPV6 禁用」开关的代码（banipv6:…），雷神版本可能变了' }
-    if (-not $paramSeen) { throw '找不到加速请求里的 banipv6 参数，雷神版本可能变了' }
-    return $changed
-}
-
 # ===========================================================================
 # ASAR 读写
 # ===========================================================================
@@ -3817,10 +3683,6 @@ function Invoke-RendererPatches {
             $changed = $true
             if ($added -contains 'stop-button-pause') { $info.patches = @($info.patches | Where-Object { $_ -ne 'stop-button-pause' }) + 'stop-button-pause' }
         }
-        if ($KeepIpv6) {
-            if (Invoke-Ipv6BanOffPatches $WorkDir) { $changed = $true }
-            $info.patches = @($info.patches | Where-Object { $_ -ne 'ipv6-ban-off' }) + 'ipv6-ban-off'
-        }
         if (-not $Md3eTheme -and (Test-LegacyAccentRuntime $WorkDir)) {
             if (Set-AccentRenderer $WorkDir $null) { $changed = $true }
             $info.patches = @($info.patches | Where-Object { $_ -ne 'md3e-system-color' })
@@ -3897,14 +3759,6 @@ function Invoke-RendererPatches {
     Set-JsText $ipcChunk $ipcText
     Write-Ok 'IPC 层广告/工具/外链拦截已安装'
 
-    }
-    # 2b) 「系统设置 → IPV6 禁用」默认关闭
-    if ($KeepIpv6) {
-    if (Invoke-Ipv6BanOffPatches $WorkDir) {
-        Write-Ok '「系统设置 → IPV6 禁用」已固定为关闭（加速时不禁用 IPv6）'
-    } else {
-        Write-Ok '「系统设置 → IPV6 禁用」已经是关闭状态，无需改动'
-    }
     }
     # 3) 社区侧栏 + 底部推广条（同一个 gameDetail chunk）
     $gdChunk = Find-JsChunk -WorkDir $WorkDir -MustContain @('name:"gameDetail"', 'game-detail-tools')
@@ -3991,7 +3845,6 @@ function Invoke-RendererPatches {
     if ($HideHeaderPromo) { $patches += 'header-ads' }
     if ($PinHeaderHeight) { $patches += 'header-height' }
     if ($AutoPauseIdleTime) { $patches += 'idle-time-pause' }
-    if ($KeepIpv6) { $patches += 'ipv6-ban-off' }
     if ($Md3eTheme) { $patches += 'md3e-theme' }
     if ($Md3eTheme -and $script:AccentSeedValue) { $patches += 'md3e-system-color' }
     $info = [ordered]@{
@@ -4591,7 +4444,6 @@ function Select-Features {
         @('HideHeaderPromo', '移除顶栏口号与搜索框轮播'),
         @('PinHeaderHeight', '固定顶栏高度，避免上下跳动'),
         @('StopButtonPauses', '点击停止加速时同时暂停计时'),
-        @('KeepIpv6', '系统设置里的「IPV6 禁用」默认关闭（保持本机 IPv6 可用）'),
         @('AutoPauseIdleTime', '计时开启但连续 3 分钟未加速时自动暂停计时'),
         @('Md3eTheme', '是否需要 M3E 主题外观'),
         @('CleanTools', '隔离捆绑工具和更新残留'),
@@ -4860,7 +4712,6 @@ Gameware-Cleaner — 雷神精简备份
 
 还原内容：
   - renderer.asar.original 放回 resources\renderer.asar
-  - 系统设置里的「IPV6 禁用」开关随 renderer.asar 一起恢复成雷神默认行为
   - quarantine\ 里被隔离的文件放回原位置
   - resources\tools 下的硬链接恢复成独立文件
   - updater.exe.disabled 改回 updater.exe
@@ -4885,11 +4736,6 @@ Gameware-Cleaner — 雷神精简备份
             Write-Log '更新：保留（-KeepUpdates）'
         } else {
             Write-Log '更新：已停更（updater.exe 改名 + 锁定渲染层热更新 + hosts 屏蔽 buildnum 域名）'
-        }
-        if ($KeepIpv6) {
-            Write-Log 'IPV6 禁用：已固定为关闭（系统设置里的开关不可点，加速时不下发禁用 IPv6）'
-        } else {
-            Write-Log 'IPV6 禁用：保留雷神默认行为（-DisabledFeatures KeepIpv6）'
         }
         Write-Log ''
         if ($result -eq 'applied') {

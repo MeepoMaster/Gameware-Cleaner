@@ -1,11 +1,16 @@
 name: Sync upstream
 
-# 每天北京时间 11:17 检查上游 TG-Twilight/Gameware-Cleaner，有更新就自动合并。
-# 也可在 Actions 页面手动点 Run workflow 立刻跑一次。
+# 无人值守：上游一有变动就同步，并自动重新打出带「IPV6 禁用默认关闭」的发布包。
+# 任何一步失败都会停下来（不发布半成品），并开 issue 提醒。
 on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      force:
+        description: 强制重建发布包（上游没变也重建）
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -24,59 +29,119 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fetch upstream
+      - name: Merge upstream
+        id: merge
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/TG-Twilight/Gameware-Cleaner.git 2>/dev/null || true
           git fetch --no-tags upstream main
-          echo "upstream head: $(git rev-parse --short upstream/main)"
-          echo "local head: $(git rev-parse --short HEAD)"
-
-      - name: Merge upstream
-        id: merge
-        run: |
-          if git merge --no-edit upstream/main; then
-            echo "result=ok" >> "$GITHUB_OUTPUT"
-          else
+          echo "上游 HEAD: $(git rev-parse --short upstream/main) / 本地 HEAD: $(git rev-parse --short HEAD)"
+          before=$(git rev-parse HEAD)
+          if ! git merge --no-edit upstream/main; then
             git merge --abort || true
-            echo "result=conflict" >> "$GITHUB_OUTPUT"
-            echo "::error::上游改动与本 fork 的改动冲突，已跳过推送，需要手动合并"
+            echo "::error::上游改动与本 fork 冲突，已中止（不会推送、也不会发布）"
             exit 1
           fi
+          after=$(git rev-parse HEAD)
+          if [ "$before" = "$after" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "上游没有新提交"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "已合并上游 $(git rev-parse --short upstream/main)"
+          fi
 
-      - name: Syntax check
-        if: steps.merge.outputs.result == 'ok'
+      - name: Push
+        if: steps.merge.outputs.changed == 'true'
+        run: |
+          git push origin HEAD:main
+          echo "已推送 $(git log -1 --oneline)"
+
+      - name: Read version
+        id: ver
+        shell: pwsh
+        run: |
+          $m = [regex]::Match((Get-Content -Raw LeiGod-OneClick.ps1), "\`$script:ScriptVersion = '([0-9][^']*)'")
+          if (-not $m.Success) { Write-Error '读不到上游版本号'; exit 1 }
+          Write-Output ("base=" + $m.Groups[1].Value) >> $env:GITHUB_OUTPUT
+          Write-Output ("上游版本 " + $m.Groups[1].Value)
+
+      - name: Check if release already exists
+        id: rel
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v${{ steps.ver.outputs.base }}-ipv6.1"
+          $exists = gh release view $tag --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0 -and $exists) { Write-Output "exists=true" >> $env:GITHUB_OUTPUT } else { Write-Output "exists=false" >> $env:GITHUB_OUTPUT }
+          Write-Output ("tag=" + $tag) >> $env:GITHUB_OUTPUT
+
+      - name: Build package
+        id: build
+        if: steps.merge.outputs.changed == 'true' || steps.rel.outputs.exists == 'false' || inputs.force == true
+        shell: pwsh
+        run: |
+          ./tools/build-release.ps1 -VersionSuffix ipv6.1
+
+      - name: Syntax check built script
+        if: steps.build.outcome == 'success'
         shell: pwsh
         run: |
           $errs = $null
-          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/LeiGod-OneClick.ps1", [ref]$null, [ref]$errs) | Out-Null
+          $f = Get-ChildItem build -Recurse -Filter 'LeiGod-OneClick.ps1' | Select-Object -First 1
+          if (-not $f) { Write-Error '构建产物里没有脚本'; exit 1 }
+          [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errs) | Out-Null
           if ($errs -and $errs.Count -gt 0) {
             $errs | Select-Object -First 10 | ForEach-Object { Write-Host "line $($_.Extent.StartLineNumber): $($_.Message)" }
-            Write-Error "合并后脚本语法检查不通过，未推送。"
+            Write-Error '补丁后的脚本语法检查不通过，不发布'
             exit 1
           }
-          Write-Host "语法检查通过"
+          Write-Output "语法检查通过：$($f.Name)"
 
-      - name: Push
-        if: steps.merge.outputs.result == 'ok'
+      - name: Publish release
+        if: steps.build.outcome == 'success'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if git diff --quiet origin/main..HEAD; then
-            echo "上游没有新提交，无需推送"
-          else
-            git push origin HEAD:main
-            echo "已推送 $(git log -1 --oneline)"
-          fi
+          $zip = Get-ChildItem build -Filter '*.zip' | Select-Object -First 1
+          if (-not $zip) { Write-Error '没有找到 zip'; exit 1 }
+          $tag = "${{ steps.rel.outputs.tag }}"
+          $name = "IPV6 禁用默认关闭 · 基于上游 ${{ steps.ver.outputs.base }}"
+          $notes = @"
+          基于上游 [v${{ steps.ver.outputs.base }}](https://github.com/TG-Twilight/Gameware-Cleaner/releases/tag/v${{ steps.ver.outputs.base }})，
+          自动重新打包并加入本 fork 的唯一改动：
+
+          ## 「系统设置 → IPV6 禁用」默认关闭并固定为关闭
+
+          - 设置页：开关默认关闭、读取旧设置时按关闭处理、去掉自动打开的逻辑、开关点击置空
+          - 加速参数：``banipv6:+P`` → ``banipv6:0``
+          - 想保留雷神原行为：运行时选 N，或加 ``-DisabledFeatures KeepIpv6``
+
+          上游脚本本身**一个字节都没改**，补丁由 ``tools/ipv6-off.ps1`` 在打包时注入，
+          所以上游怎么改都不会与本 fork 冲突。
+          原始代码 Copyright (C) 2026 TG-Twilight，GPL-3.0-only。
+          "@
+          $exists = gh release view $tag --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0 -and $exists) {
+            gh release upload $tag $zip.FullName --clobber
+            Write-Output "已更新附件：$($zip.Name)"
+          } else {
+            gh release create $tag $zip.FullName --title $name --notes $notes --target main
+            Write-Output "已创建 release：$tag"
+          }
 
       - name: Open issue when manual work is needed
-        if: failure() || steps.merge.outputs.result == 'conflict'
+        if: failure()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          title="上游更新需要手动处理"
+          title="同步/打包失败，需要手动处理"
           if [ "$(gh issue list --state open --search "$title in:title" --json number --jq 'length')" != "0" ]; then
             echo "已有未关闭的提示 issue，跳过"
             exit 0
           fi
-          gh issue create --title "$title" --body "定时同步上游失败：上游改动与本 fork 的改动（IPV6 禁用默认关闭）冲突，或合并后脚本语法检查不通过。请查看 Actions 里这次运行的日志；修好后关掉本 issue。"
+          gh issue create --title "$title" --body "定时任务失败：可能原因 —— (1) 上游改动与本 fork 冲突；(2) 上游脚本结构变化导致补丁锚点失效（tools/ipv6-off.ps1 需要适配）；(3) 补丁后语法检查不通过；(4) 发布失败。请打开 Actions 里这次运行的日志定位；修好后关掉本 issue。"

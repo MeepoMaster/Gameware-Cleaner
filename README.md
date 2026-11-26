@@ -13,10 +13,10 @@
 
 </div>
 
-> [!NOTE]
-> **这是 [TG-Twilight/Gameware-Cleaner](https://github.com/TG-Twilight/Gameware-Cleaner) 的 fork**，
-> 只额外加了一处改动：「系统设置 → IPV6 禁用」**默认关闭并固定为关闭**
-> （雷神原本会在加速时让驱动禁用本机 IPv6）。不需要这个改动请用上游原版。
+> [!IMPORTANT]
+> **请从 [Releases](https://github.com/MeepoMaster/Gameware-Cleaner/releases/latest) 下载使用，不要用 Code → Download ZIP。**
+> 本仓库的 `LeiGod-OneClick.ps1` 与上游**一字不差**（这样上游更新永远不会冲突），
+> 带「IPV6 禁用默认关闭」的版本由 CI 打包时注入补丁生成，详见 [FORK.md](FORK.md)。
 
 > [!IMPORTANT]
 > **用过 0.10.0～0.12.0 并开了取色，开机后会弹出空白终端窗口？**
@@ -104,20 +104,6 @@
 
 被隔离的文件仍保存在备份里（用户文件夹下），实际效果取决于安装版本、已有文件和所选功能，
 以脚本结束时显示的统计为准。稳定使用几天后删除备份，才会真正释放这部分空间。
-
-</details>
-
-<details>
-<summary><b>「IPV6 禁用」开关为什么点不动？</b></summary>
-
-雷神默认会在加速时禁用本机 IPv6（「系统设置 → IPV6 禁用」默认开启），部分网络下会让 IPv6 应用、部分游戏联机失效。
-本脚本把这项固定为关闭：开关显示为关闭且点击无效，加速请求里的 `banipv6` 固定为 `0`，不会再下发禁用 IPv6 的指令。
-想保留雷神默认行为，运行时在「IPV6 禁用默认关闭」这一项选 **N**（或加 `-DisabledFeatures KeepIpv6`）。
-
-<summary><b>雷神自己更新后，广告又回来了？</b></summary>
-
-雷神会在客户端版本号不变的情况下，偷偷下载新的界面文件，把去广告和主题全部覆盖掉。
-0.13.1 起，冻结更新会同时锁住这类热更新的下载目录。已经被覆盖的话，退出雷神后重新运行一次脚本即可。
 
 </details>
 
