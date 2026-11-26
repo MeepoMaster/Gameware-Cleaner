@@ -41,6 +41,8 @@ jobs:
           else
             git merge --abort || true
             echo "result=conflict" >> "$GITHUB_OUTPUT"
+            echo "::error::上游改动与本 fork 的改动冲突，已跳过推送，需要手动合并"
+            exit 1
           fi
 
       - name: Syntax check
@@ -68,6 +70,7 @@ jobs:
 
       - name: Open issue when manual work is needed
         if: failure() || steps.merge.outputs.result == 'conflict'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
