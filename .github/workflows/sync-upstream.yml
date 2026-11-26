@@ -78,7 +78,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "v${{ steps.ver.outputs.base }}-ipv6.1"
+          $tag = "v${{ steps.ver.outputs.base }}"
           $exists = 'false'
           $out = gh release view $tag --json tagName 2>$null
           if ($LASTEXITCODE -eq 0 -and $out) { $exists = 'true' }
@@ -122,7 +122,7 @@ jobs:
           if (-not $zip) { Write-Error '没有找到 zip'; exit 1 }
           $tag = "${{ steps.rel.outputs.tag }}"
           $base = "${{ steps.ver.outputs.base }}"
-          $name = "IPV6 禁用默认关闭 · 基于上游 $base"
+          $name = "v$base"
           $notes = @"
           基于上游 [v$base](https://github.com/TG-Twilight/Gameware-Cleaner/releases/tag/v$base)，
           自动重新打包并加入本 fork 的唯一改动：

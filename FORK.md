@@ -9,7 +9,7 @@
 | 位置 | 内容 |
 |---|---|
 | `LeiGod-OneClick.ps1`（仓库里） | **与上游一字不差**，方便自动跟随上游更新 |
-| [Releases](https://github.com/MeepoMaster/Gameware-Cleaner/releases/latest) | 打包时注入 IPV6 补丁后的成品，**下载用这个** |
+| [Releases](https://github.com/MeepoMaster/Gameware-Cleaner/releases/latest) | 打包时注入 IPV6 补丁后的成品，**下载用这个**；版本号与附件名跟上游完全一致 |
 | `tools/ipv6-off.ps1` | 补丁器：把 IPV6 功能注入到上游脚本 |
 | `tools/build-release.ps1` | 打包器：生成 release 附件（脚本 + .cmd + LICENSE + 使用说明） |
 | `.github/workflows/sync-upstream.yml` | 定时任务：同步上游 → 打补丁 → 语法检查 → 发布 |
@@ -24,7 +24,7 @@
 现在上游脚本保持原样、补丁在打包时注入，于是：
 
 - `git merge upstream/main` **永远干净**，不会再有合并冲突
-- 上游发新版 → 定时任务自动合并 → 自动重新打包 → 自动发布新 release
+- 上游发新版 → 定时任务自动合并 → 自动重新打包 → 自动发布新 release（tag 与附件名就是上游的 `v<版本>` / `LeiGod-OneClick-<版本>.zip`，不加任何后缀）
 - 补丁注入有严格校验：任何"功能性锚点"找不到就**直接报错停止**，绝不会发布半成品
 
 已经验证：补丁器对上游 0.13.1 的产物在雷神 11.3.3.2 上 `-DryRun` 全流程通过

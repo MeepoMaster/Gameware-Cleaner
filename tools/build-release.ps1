@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     构建带「IPV6 禁用默认关闭」补丁的发布包。
 
@@ -6,16 +6,16 @@
     上游脚本（仓库根目录的 LeiGod-OneClick.ps1）保持一字不改；
     本脚本用 tools\ipv6-off.ps1 生成打过补丁的副本，连同 .cmd、LICENSE、使用说明一起打成 zip。
 
-    产物：
-        build\LeiGod-OneClick-<上游版本>-ipv6.<n>\...   目录
-        build\LeiGod-OneClick-<上游版本>-ipv6.<n>.zip   发布附件
+    命名与上游完全一致（不加任何后缀）：
+        tag     : v<上游版本>
+        附件    : LeiGod-OneClick-<上游版本>.zip
+        包内目录: LeiGod-OneClick-<上游版本>\
 
     补丁失败时直接抛错（不会产出半成品），CI 里会因此变红并提 issue。
 #>
 [CmdletBinding()]
 param(
     [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
-    [string]$VersionSuffix = 'ipv6.1',
     [string]$OutRoot = ''
 )
 
@@ -29,24 +29,22 @@ foreach ($p in @($upstreamScript, $patcher)) {
     if (-not (Test-Path -LiteralPath $p)) { throw ('缺少文件：' + $p) }
 }
 
-# 1) 读上游版本号
+# 1) 读上游版本号（产物与上游同名，不加后缀）
 $text = [IO.File]::ReadAllText($upstreamScript)
 $m = [regex]::Match($text, "\`$script:ScriptVersion = '([0-9][^']*)'")
 if (-not $m.Success) { throw '从上游脚本里读不到 $script:ScriptVersion，上游结构可能变了（需要适配 build-release.ps1）' }
-$baseVersion = $m.Groups[1].Value
-$releaseName = $baseVersion + '-' + $VersionSuffix      # 0.13.1-ipv6.1
-$artifactVersion = $baseVersion + '+' + $VersionSuffix  # 0.13.1+ipv6.1
-Write-Host ('上游版本：' + $baseVersion + '；本包版本：' + $artifactVersion)
+$version = $m.Groups[1].Value
+$pkgName = 'LeiGod-OneClick-' + $version
+Write-Host ('上游版本：' + $version)
 
 # 2) 生成目录
-$pkgName = 'LeiGod-OneClick-' + $releaseName
 $pkgDir = Join-Path $OutRoot $pkgName
 if (Test-Path -LiteralPath $pkgDir) { Remove-Item -LiteralPath $pkgDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
 
 # 3) 打补丁
 $built = Join-Path $pkgDir 'LeiGod-OneClick.ps1'
-& $patcher -Source $upstreamScript -Out $built -VersionSuffix ('+' + $VersionSuffix)
+& $patcher -Source $upstreamScript -Out $built
 if (-not (Test-Path -LiteralPath $built)) { throw '补丁器没有产出脚本' }
 
 # 4) 附带文件
@@ -58,10 +56,10 @@ foreach ($f in @('Run-LeiGod-OneClick.cmd', 'Fix-Startup-Window.cmd', 'LICENSE')
 
 # 5) 使用说明
 $readme = @'
-雷神加速器一键精简 __ARTIFACT__
+雷神加速器一键精简 __VERSION__
 ==========================
 
-本包基于上游 __BASE__，只额外加了一处改动：
+本包基于上游同名版本（v__VERSION__），只额外加了一处改动：
 
   「系统设置 → IPV6 禁用」默认关闭并固定为关闭
 
@@ -102,7 +100,7 @@ LICENSE                   GPL-3.0 许可证
 本项目为独立第三方工具，与雷神官方无隶属或合作关系。
 原始代码 Copyright (C) 2026 TG-Twilight，按 GPL-3.0-only 授权；本 fork 保留同一许可。
 '@
-$readme = $readme.Replace('__ARTIFACT__', $artifactVersion).Replace('__BASE__', $baseVersion)
+$readme = $readme.Replace('__VERSION__', $version)
 # 用 CRLF 写，方便 Windows 记事本
 $readme = $readme -replace "`r?`n", "`r`n"
 [IO.File]::WriteAllText((Join-Path $pkgDir '使用说明.txt'), $readme, (New-Object System.Text.UTF8Encoding($true)))
@@ -118,8 +116,6 @@ Write-Host ('zip：' + $zip + '（' + (Get-Item -LiteralPath $zip).Length + ' �
 
 # 7) 供 CI 使用
 if ($env:GITHUB_OUTPUT) {
-    Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ('base=' + $baseVersion) -Encoding UTF8
-    Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ('release=' + $releaseName) -Encoding UTF8
-    Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ('artifact=' + $artifactVersion) -Encoding UTF8
+    Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ('base=' + $version) -Encoding UTF8
     Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value ('zip=' + $zip) -Encoding UTF8
 }
