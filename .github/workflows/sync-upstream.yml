@@ -20,6 +20,10 @@ concurrency:
   group: sync-upstream
   cancel-in-progress: false
 
+env:
+  # fork 里 gh 默认会指向上游仓库，必须显式指定为「本仓库」
+  GH_REPO: ${{ github.repository }}
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -66,6 +70,7 @@ jobs:
           if (-not $m.Success) { Write-Error '读不到上游版本号'; exit 1 }
           Write-Output ("base=" + $m.Groups[1].Value) >> $env:GITHUB_OUTPUT
           Write-Output ("上游版本 " + $m.Groups[1].Value)
+          $global:LASTEXITCODE = 0
 
       - name: Check if release already exists
         id: rel
@@ -88,6 +93,7 @@ jobs:
         shell: pwsh
         run: |
           ./tools/build-release.ps1 -VersionSuffix ipv6.1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Syntax check built script
         if: steps.build.outcome == 'success'
@@ -103,6 +109,7 @@ jobs:
             exit 1
           }
           Write-Output "语法检查通过：$($f.Name)"
+          $global:LASTEXITCODE = 0
 
       - name: Publish release
         if: steps.build.outcome == 'success'
@@ -110,42 +117,52 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $ErrorActionPreference = 'Continue'
           $zip = Get-ChildItem build -Filter '*.zip' | Select-Object -First 1
           if (-not $zip) { Write-Error '没有找到 zip'; exit 1 }
           $tag = "${{ steps.rel.outputs.tag }}"
-          $name = "IPV6 禁用默认关闭 · 基于上游 ${{ steps.ver.outputs.base }}"
+          $base = "${{ steps.ver.outputs.base }}"
+          $name = "IPV6 禁用默认关闭 · 基于上游 $base"
           $notes = @"
-          基于上游 [v${{ steps.ver.outputs.base }}](https://github.com/TG-Twilight/Gameware-Cleaner/releases/tag/v${{ steps.ver.outputs.base }})，
+          基于上游 [v$base](https://github.com/TG-Twilight/Gameware-Cleaner/releases/tag/v$base)，
           自动重新打包并加入本 fork 的唯一改动：
 
           ## 「系统设置 → IPV6 禁用」默认关闭并固定为关闭
 
           - 设置页：开关默认关闭、读取旧设置时按关闭处理、去掉自动打开的逻辑、开关点击置空
-          - 加速参数：``banipv6:+P`` → ``banipv6:0``
-          - 想保留雷神原行为：运行时选 N，或加 ``-DisabledFeatures KeepIpv6``
+          - 加速参数：banipv6:+P → banipv6:0
+          - 想保留雷神原行为：运行时选 N，或加 -DisabledFeatures KeepIpv6
 
-          上游脚本本身**一个字节都没改**，补丁由 ``tools/ipv6-off.ps1`` 在打包时注入，
+          上游脚本本身没有任何改动，补丁由 tools/ipv6-off.ps1 在打包时注入，
           所以上游怎么改都不会与本 fork 冲突。
           原始代码 Copyright (C) 2026 TG-Twilight，GPL-3.0-only。
           "@
           $exists = gh release view $tag --json tagName 2>$null
           if ($LASTEXITCODE -eq 0 -and $exists) {
             gh release upload $tag $zip.FullName --clobber
+            if ($LASTEXITCODE -ne 0) { Write-Error "上传附件失败（$LASTEXITCODE）"; exit 1 }
             Write-Output "已更新附件：$($zip.Name)"
           } else {
             gh release create $tag $zip.FullName --title $name --notes $notes --target main
+            if ($LASTEXITCODE -ne 0) { Write-Error "创建 release 失败（$LASTEXITCODE）"; exit 1 }
             Write-Output "已创建 release：$tag"
           }
+          $global:LASTEXITCODE = 0
 
       - name: Open issue when manual work is needed
         if: failure()
         continue-on-error: true
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          title="同步/打包失败，需要手动处理"
-          if [ "$(gh issue list --state open --search "$title in:title" --json number --jq 'length')" != "0" ]; then
-            echo "已有未关闭的提示 issue，跳过"
-            exit 0
-          fi
-          gh issue create --title "$title" --body "定时任务失败：可能原因 —— (1) 上游改动与本 fork 冲突；(2) 上游脚本结构变化导致补丁锚点失效（tools/ipv6-off.ps1 需要适配）；(3) 补丁后语法检查不通过；(4) 发布失败。请打开 Actions 里这次运行的日志定位；修好后关掉本 issue。"
+          $title = '同步/打包失败，需要手动处理'
+          $open = @(gh issue list --state open --limit 100 --json number,title 2>$null | ConvertFrom-Json)
+          if (@($open | Where-Object { $_.title -eq $title }).Count -gt 0) {
+            Write-Output '已有未关闭的提示 issue，跳过'
+          } else {
+            $body = '定时任务失败。可能原因：(1) 上游改动与本 fork 冲突；(2) 上游脚本结构变化导致补丁锚点失效（需要适配 tools/ipv6-off.ps1）；(3) 补丁后语法检查不通过；(4) 发布 release 失败。请打开 Actions 里这次运行的日志定位；修好后关掉本 issue。'
+            gh issue create --title $title --body $body
+            if ($LASTEXITCODE -eq 0) { Write-Output '已创建提示 issue' } else { Write-Warning "创建 issue 失败（$LASTEXITCODE）" }
+          }
+          $global:LASTEXITCODE = 0
